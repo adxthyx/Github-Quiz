@@ -1,192 +1,140 @@
 import "server-only";
 
-import { createHighlighter, type Highlighter } from "shiki";
-import { POOL, type Candidate, type PoolRepo } from "./repos";
-import type { Choice, Question, Repo } from "./types";
+import { POOL, type RepoSeed } from "@/lib/repos";
+import { redact } from "@/lib/redact";
+import { highlightToHtml } from "@/lib/highlight";
+import type { Question, RepoMeta } from "@/lib/types";
 
-/* ---------- Shiki: singleton highlighter + token-tuned theme ---------- */
+const SHORT_LINES = 14;
+const EXTEND_FACTOR = 5; // "Extend" lifeline shows 5x more lines
+const SKIP_HEADER = 8; // skip a typical license/header block when possible
 
-const LANGS = [
-  "javascript",
-  "typescript",
-  "c",
-  "python",
-  "rust",
-  "go",
-  "php",
-  "ruby",
-];
-
-// TextMate theme mapped onto the contract color tokens.
-const QUIZ_THEME = {
-  name: "quiz-dark",
-  type: "dark",
-  colors: { "editor.background": "#0e1014", "editor.foreground": "#ededef" },
-  settings: [
-    { settings: { background: "#0e1014", foreground: "#ededef" } },
-    { scope: ["comment", "punctuation.definition.comment"], settings: { foreground: "#6b7280", fontStyle: "italic" } },
-    { scope: ["string", "string.quoted", "constant.character"], settings: { foreground: "#16c784" } },
-    { scope: ["keyword", "storage.type", "storage.modifier", "keyword.control"], settings: { foreground: "#ff4500" } },
-    { scope: ["entity.name.function", "support.function", "meta.function-call"], settings: { foreground: "#8b8bff" } },
-    { scope: ["constant.numeric", "constant.language", "keyword.other.unit"], settings: { foreground: "#ff5c1a" } },
-    { scope: ["entity.name.type", "support.type", "entity.name.class", "support.class"], settings: { foreground: "#9bd0ff" } },
-    { scope: ["variable", "variable.other", "meta.definition.variable"], settings: { foreground: "#ededef" } },
-    { scope: ["punctuation", "meta.brace"], settings: { foreground: "#9ba1a6" } },
-  ],
-} as const;
-
-let highlighterPromise: Promise<Highlighter> | null = null;
-function getHighlighter() {
-  if (!highlighterPromise) {
-    highlighterPromise = createHighlighter({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      themes: [QUIZ_THEME as any],
-      langs: LANGS,
-    });
+/**
+ * Build a fresh set of quiz questions on every call. Reads source files from
+ * GitHub with `cache: "no-store"`, redacts each repo's tells, highlights with
+ * Shiki, and attaches shuffled multiple-choice options. Resilient: any repo
+ * whose fetch/parse fails is skipped, so a flaky source never breaks the page.
+ */
+export async function buildQuestions(count: number): Promise<Question[]> {
+  const questions: Question[] = [];
+  for (const seed of shuffle(POOL)) {
+    if (questions.length >= count) break;
+    const q = await buildOne(seed);
+    if (q) questions.push(q);
   }
-  return highlighterPromise;
+  return questions;
 }
 
-/* ---------- helpers ---------- */
+async function buildOne(seed: RepoSeed): Promise<Question | null> {
+  for (const path of shuffle(seed.paths)) {
+    try {
+      const raw = await fetchSource(seed, path);
+      const lines = normalize(raw);
+      if (lines.length < 4) continue;
 
-function shuffle<T>(arr: T[]): T[] {
+      const short = pickWindow(lines, SHORT_LINES);
+      const ext = expandWindow(lines, short, SHORT_LINES * EXTEND_FACTOR);
+
+      const [highlightedHtml, highlightedHtmlExtended] = await Promise.all([
+        highlightToHtml(redact(short.text, seed.tells), seed.lang),
+        highlightToHtml(redact(ext.text, seed.tells), seed.lang),
+      ]);
+
+      return {
+        id: `${seed.id}#${short.start}`,
+        lang: seed.lang,
+        highlightedHtml,
+        highlightedHtmlExtended,
+        lineRange: [short.start + 1, short.start + short.count],
+        pathHint: redact(path, seed.tells),
+        correctId: seed.id,
+        choices: buildChoices(seed),
+      };
+    } catch {
+      // try the next candidate path; if none work, the repo is skipped
+    }
+  }
+  return null;
+}
+
+async function fetchSource(seed: RepoSeed, path: string): Promise<string> {
+  const token = process.env.GITHUB_TOKEN;
+
+  // Primary: authenticated GitHub contents API (raw media type, never cached).
+  if (token) {
+    const res = await fetch(
+      `https://api.github.com/repos/${seed.fullName}/contents/${path}?ref=${seed.branch}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github.raw+json",
+          "User-Agent": "code-match-quiz",
+        },
+        cache: "no-store",
+      },
+    );
+    if (res.ok) return res.text();
+    // fall through to the CDN on auth/rate-limit errors
+  }
+
+  // Fallback: raw CDN (works without a token; still uncached).
+  const res = await fetch(
+    `https://raw.githubusercontent.com/${seed.fullName}/${seed.branch}/${path}`,
+    { cache: "no-store" },
+  );
+  if (!res.ok) throw new Error(`fetch ${seed.fullName}/${path} -> ${res.status}`);
+  return res.text();
+}
+
+interface Window {
+  start: number; // 0-based index into lines
+  count: number;
+  text: string;
+}
+
+/** Pick a short window, preferring to skip a leading license/header block. */
+function pickWindow(lines: string[], size: number): Window {
+  const count = Math.min(size, lines.length);
+  const maxStart = Math.max(0, lines.length - count);
+  const minStart = Math.min(SKIP_HEADER, maxStart);
+  const start = minStart + Math.floor(Math.random() * (maxStart - minStart + 1));
+  return { start, count, text: lines.slice(start, start + count).join("\n") };
+}
+
+/** Grow a window to `size` lines, centered on the short one and clamped to file. */
+function expandWindow(lines: string[], short: Window, size: number): Window {
+  const count = Math.min(size, lines.length);
+  const pad = Math.floor((count - short.count) / 2);
+  const start = clamp(short.start - pad, 0, Math.max(0, lines.length - count));
+  return { start, count, text: lines.slice(start, start + count).join("\n") };
+}
+
+function buildChoices(correct: RepoSeed): RepoMeta[] {
+  const distractors = shuffle(POOL.filter((r) => r.id !== correct.id))
+    .slice(0, 3)
+    .map(toMeta);
+  return shuffle([toMeta(correct), ...distractors]);
+}
+
+function toMeta(r: RepoSeed): RepoMeta {
+  return { id: r.id, fullName: r.fullName, description: r.description, url: r.url };
+}
+
+function normalize(raw: string): string[] {
+  const lines = raw.replace(/\t/g, "  ").split("\n");
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  return lines;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function shuffle<T>(arr: readonly T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
-}
-
-const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
-
-function toRepo(r: PoolRepo): Repo {
-  return { fullName: r.fullName, description: r.description, url: r.url };
-}
-
-/** Fetch raw file contents via the GitHub contents API (default branch). */
-async function fetchFile(fullName: string, path: string): Promise<string> {
-  const token = process.env.GITHUB_TOKEN;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github.raw",
-    "User-Agent": "github-code-match-quiz",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(
-    `https://api.github.com/repos/${fullName}/contents/${path}`,
-    { headers, cache: "no-store" },
-  );
-  if (!res.ok) {
-    throw new Error(`GitHub ${res.status} for ${fullName}/${path}`);
-  }
-  return res.text();
-}
-
-/** Pick a ~40-line code window, skipping a leading license/comment header. */
-function pickSnippet(source: string): string {
-  const lines = source.split("\n");
-
-  // Skip a leading comment/license block.
-  let start = 0;
-  while (
-    start < lines.length &&
-    /^\s*($|\/\/|\/\*|\*|#|<!--|;)/.test(lines[start])
-  ) {
-    start++;
-  }
-
-  const WINDOW = 40;
-  const maxStart = Math.max(start, lines.length - WINDOW);
-  // Random offset within the body for variety between loads.
-  const from =
-    maxStart > start
-      ? start + Math.floor(Math.random() * (maxStart - start))
-      : start;
-
-  return lines
-    .slice(from, from + WINDOW)
-    .join("\n")
-    .replace(/\s+$/, "");
-}
-
-/** Strip repo/author/package identifiers so the snippet can't be matched by name. */
-function redact(code: string, repo: PoolRepo): string {
-  const [owner, name] = repo.fullName.split("/");
-  const tokens = new Set<string>([owner, name]);
-
-  // Derive extra brand-ish words from the repo name (drop generic suffixes).
-  name
-    .replace(/[-_.]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length >= 3 && !["core", "lang", "js", "framework"].includes(w))
-    .forEach((w) => tokens.add(w));
-
-  let out = code;
-  // Remove github.com/owner/... URLs first.
-  out = out.replace(
-    new RegExp(`https?://[^\\s'"\`]*${owner}[^\\s'"\`]*`, "gi"),
-    "https://█████",
-  );
-  for (const t of tokens) {
-    if (!t) continue;
-    out = out.replace(new RegExp(`\\b${escapeRe(t)}\\b`, "gi"), "█████");
-  }
-  return out;
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/* ---------- public API ---------- */
-
-/**
- * Build `n` fresh questions on each call: random repo subset, random file per
- * repo, redacted snippet, Shiki-highlighted, shuffled choices. Resilient — a
- * failed GitHub fetch drops that repo and backfills from the remaining pool.
- */
-export async function buildQuestions(n = 6): Promise<Question[]> {
-  const highlighter = await getHighlighter();
-  const order = shuffle(POOL);
-  const questions: Question[] = [];
-
-  for (const repo of order) {
-    if (questions.length >= n) break;
-    try {
-      const candidate: Candidate = pick(repo.candidates);
-      const source = await fetchFile(repo.fullName, candidate.path);
-      const snippet = redact(pickSnippet(source), repo);
-      if (snippet.replace(/\s/g, "").length < 40) continue; // too thin
-
-      const snippetHtml = highlighter.codeToHtml(snippet, {
-        lang: candidate.lang,
-        theme: "quiz-dark",
-      });
-
-      const distractors = shuffle(POOL.filter((r) => r.fullName !== repo.fullName))
-        .slice(0, 3)
-        .map((r) => ({ ...toRepo(r), correct: false }) satisfies Choice);
-
-      const choices = shuffle<Choice>([
-        { ...toRepo(repo), correct: true },
-        ...distractors,
-      ]);
-
-      questions.push({
-        id: `${repo.fullName}:${candidate.path}:${questions.length}`,
-        lang: candidate.lang,
-        filePath: candidate.path,
-        snippetHtml,
-        choices,
-        answer: toRepo(repo),
-      });
-    } catch {
-      // Drop this repo; loop continues and backfills from the pool.
-      continue;
-    }
-  }
-
-  return questions;
 }

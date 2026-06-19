@@ -1,64 +1,54 @@
-# GitHub Code-Match Quiz
+# GitHub Code-Match Quiz — architecture & file map
 
-Show a redacted, syntax-highlighted code snippet; the player picks which of four
-famous open-source repos it came from (2×2 choice cards); the reveal links the real
-repo on GitHub and shows the file path.
+Guess which famous open-source repo a redacted code snippet came from. The site is a
+Next.js 16 (App Router, Turbopack) app: a static landing page, a dynamically-rendered quiz
+that pulls fresh snippets per visit, an about page, and an end-of-game recap.
 
-## Stack
-- Next.js 16 (App Router) · React 19 · Tailwind CSS v4 · TypeScript
-- [Motion](https://motion.dev) (animation/gestures/layout) · [Shiki](https://shiki.style)
-  (highlighting) · [canvas-confetti](https://github.com/catdad/canvas-confetti) ·
-  [lucide-react](https://lucide.dev) · Geist / Geist Mono via `next/font`
-- No Three.js, no UI kits (see design contract).
+## Routes (`app/`)
+- `layout.tsx` — root shell. Loads Geist / Geist Mono via `next/font`, wraps every page in
+  `<SiteHeader>` + `<SiteFooter>`.
+- `page.tsx` — **`/` landing** (static): hero, sample redacted snippet, "How it works", the
+  three lifelines, CTAs into `/play`.
+- `play/page.tsx` — **`/play` quiz** (`export const dynamic = "force-dynamic"`). Awaits
+  `buildQuestions(6)` and renders `<Quiz>`; shows a fallback if nothing loads.
+- `play/loading.tsx` — skeleton shown while questions build (uses the `.skeleton` shimmer).
+- `about/page.tsx` — **`/about`** (static): rules, scoring, lifelines, and the live repo pool.
+- `globals.css` — dark-only design tokens, background mesh/grain, Shiki + `.redacted` styles,
+  keyframes, and the `prefers-reduced-motion` overrides. **Source of truth for all styling.**
 
-## Data pipeline — fresh per page load
-Not static (no committed question file) and not live (no realtime/polling). On **every**
-page open the server builds a new set:
+## Data pipeline — fresh per page load (`lib/`)
+On every `/play` load (never cached), `build-questions.ts` builds a new set:
+- `repos.ts` — `POOL: RepoSeed[]`. Each entry: `id`, `fullName`, `description`, `url`,
+  `branch`, Shiki `lang`, candidate `paths[]`, and `tells[]` (brand terms to redact). Add a
+  repo by appending an entry.
+- `build-questions.ts` — `import "server-only"`. For a random subset of repos: fetch a random
+  source file with `cache: "no-store"`, pick a random short window (+ a 5× window for Extend),
+  redact, highlight, and attach four shuffled choices. **Resilient**: any repo whose fetch
+  fails is skipped so a flaky source never breaks the page.
+  - Fetch: authenticated GitHub contents API when `GITHUB_TOKEN` is set, else falls back to the
+    `raw.githubusercontent.com` CDN. The token is read server-side only and never serialized.
+- `redact.ts` — replaces each `tell` (case-insensitive, substring) with same-length `█` runs.
+- `highlight.ts` — singleton Shiki highlighter; wraps `█` runs in `<span class="redacted">`.
+- `types.ts` — `RepoMeta` and the client-facing `Question` payload (redacted HTML + metadata
+  only; never raw source or the token).
 
-```
-app/page.tsx (force-dynamic)  →  lib/build-questions.ts  →  GitHub contents API (no-store)
-  async Server Component            server-only             Authorization: Bearer GITHUB_TOKEN
-                                       │
-        random subset of lib/repos.ts pool → random file per repo → redact → Shiki → shuffle
-                                       ↓
-                              Question[]  →  <Quiz> (client)
-```
+## UI (`components/`)
+- `Quiz.tsx` (client) — orchestrates index / score / answers / done, plus once-per-game
+  lifeline state and per-question effects. Renders the progress bar, `Lifelines`,
+  `QuestionCard`, and `ResultsRecap`; fires `Confetti` on a correct pick.
+- `QuestionCard.tsx` — snippet panel (CSS 3D pointer tilt), choices, and the post-answer
+  reveal. Honors `extended` (which HTML), `hiddenChoiceIds` (50:50), `snitchRevealed` (path).
+- `CodeSnippet.tsx` — renders trusted server-generated Shiki HTML.
+- `ChoiceButton.tsx` — answer option with hover/focus/active/disabled + correct/incorrect/
+  eliminated states.
+- `Lifelines.tsx` — 50:50 / Extend / Snitch, each single-use; `LifelineState` lives here.
+- `Confetti.tsx` — one-shot burst, `disableForReducedMotion`.
+- `ResultsRecap.tsx` — final score, verdict, per-question breakdown, "Play again".
+- `SiteHeader.tsx` / `SiteFooter.tsx` — nav shell.
 
-- Random repo subset + random file window ⇒ **questions change every visit**.
-- `fetch(..., { cache: 'no-store' })` + `export const dynamic = 'force-dynamic'` defeat caching.
-- `GITHUB_TOKEN` (in `.env`) is read server-side only; it never reaches the client — only the
-  redacted question payload is serialized.
-- Resilient: a failed GitHub fetch drops that repo and backfills from the pool, so one hiccup
-  never blanks the quiz. `app/loading.tsx` shows a skeleton while the set builds.
+## Environment
+- `GITHUB_TOKEN` — optional but recommended, in `.env` (gitignored). Raises the GitHub rate
+  limit; without it the builder uses the unauthenticated raw CDN.
 
-## Data model — `lib/types.ts`
-`Repo { fullName, description, url }` · `Choice = Repo & { correct }` ·
-`Question { id, lang, filePath, snippetHtml, choices[4], answer }`.
-
-## File map
-- `app/globals.css` — design tokens, Tailwind v4 `@theme`, shadows/glass, radial-mesh + grain
-  background, blob-drift, reduced-motion killswitch, Shiki theme hooks.
-- `app/layout.tsx` — Geist fonts, dark `<html>`, metadata.
-- `app/page.tsx` / `app/loading.tsx` — dynamic quiz page + skeleton.
-- `lib/repos.ts` — curated repo pool (+ candidate file paths).
-- `lib/build-questions.ts` — server-only builder (fetch → redact → Shiki → shuffle).
-- `components/` — `Quiz`, `TopBar`, `ScoreChip`, `Streak`, `CodePanel`, `ChoiceCard`
-  (pointer-tracked CSS-3D tilt), `ChoiceGrid`, `RevealPanel` (slide/flip + magnetic Next),
-  `Skeleton`.
-
-## Run
-```bash
-# .env must contain GITHUB_TOKEN=ghp_xxx  (gitignored, never commit)
-npm install
-npm run dev          # open http://localhost:3000
-npm run build        # / is ƒ Dynamic (rebuilt per request)
-npm run lint
-```
-
-Reload the page twice — the snippet set should change each time, and `GITHUB_TOKEN` should
-never appear in the client bundle or network payload.
-
-## Design contract
-The visual system is fixed: dark-only, exact color tokens, bento layout, CSS-3D (no WebGL),
-Motion timing tokens, honor `prefers-reduced-motion`, Lucide only, no emoji/gradients. See
-`AGENTS.md` for the enforced guardrails.
+## Commands
+`npm run dev` · `npm run build` (`/` & `/about` static, `/play` ƒ Dynamic) · `npm run lint`.

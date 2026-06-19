@@ -225,6 +225,16 @@ body::after {
   user-select: none;
 }
 
+/* Redaction bars — block glyphs hidden behind a flat bar (see lib/highlight.ts) */
+.code-shiki .redacted {
+  color: transparent;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0 1px;
+  user-select: none;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
 /* ============================================================
    Reduced motion — kill tilt/drift/confetti/shake; keep fades
    ============================================================ */
