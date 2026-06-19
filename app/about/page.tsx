@@ -3,7 +3,7 @@ import { ArrowRight, Scissors, Maximize2, Search } from "lucide-react";
 import { POOL } from "@/lib/repos";
 
 export const metadata = {
-  title: "How to play · CodeMatch",
+  title: "How to play",
 };
 
 const LIFELINES = [

@@ -1,6 +1,10 @@
 import { buildQuestions } from "@/lib/build-questions";
 import { Quiz } from "@/components/Quiz";
 
+export const metadata = {
+  title: "Play",
+};
+
 // Rebuild questions from the GitHub API on every page load — never cached,
 // so the snippet set changes each visit.
 export const dynamic = "force-dynamic";
