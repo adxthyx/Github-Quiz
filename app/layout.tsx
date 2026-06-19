@@ -15,7 +15,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GitHub Code-Match Quiz",
+  title: {
+    default: "CodeMatch — Guess the repo from its code",
+    template: "%s · CodeMatch",
+  },
   description:
     "Guess which famous open-source repo a redacted code snippet came from.",
 };
