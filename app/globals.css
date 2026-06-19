@@ -1,26 +1,242 @@
 @import "tailwindcss";
 
+/* ============================================================
+   GitHub Code-Match Quiz — design tokens (UI DESIGN CONTRACT)
+   Dark theme only. No light mode. Tokens are verbatim.
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* 1. COLOR TOKENS */
+  --bg: #0a0a0b;
+  --surface: #141416;
+  --surface-2: #1c1f24;
+  --code-bg: #0e1014;
+  --hairline: #2a2d34;
+  --text: #ededef;
+  --text-2: #9ba1a6;
+  --text-muted: #6b7280;
+  --brand: #ff4500;
+  --brand-hi: #ff5c1a;
+  --accent: #8b8bff;
+  --success: #16c784;
+  --danger: #f0616d;
+  --glow-brand: rgba(255, 69, 0, 0.4);
+  --glow-success: rgba(22, 199, 132, 0.4);
+  --glow-danger: rgba(240, 97, 109, 0.4);
+
+  /* 3. RADIUS */
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+
+  /* 3. DEPTH — neutral base shadow + colored glow on state */
+  --shadow-rest: inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 32px -16px rgba(0, 0, 0, 0.7);
+  --shadow-hover-brand: inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 32px -16px rgba(0, 0, 0, 0.7), 0 24px 64px -24px var(--glow-brand);
+  --shadow-hover-success: inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 32px -16px rgba(0, 0, 0, 0.7), 0 24px 64px -24px var(--glow-success);
+  --shadow-hover-danger: inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 32px -16px rgba(0, 0, 0, 0.7), 0 24px 64px -24px var(--glow-danger);
+
+  /* 7. MOTION timing tokens */
+  --t-fast: 120ms;
+  --t-base: 220ms;
+  --t-slow: 380ms;
+  --t-entrance: 500ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
+/* Map the tokens needed as utilities into Tailwind v4 */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-code-bg: var(--code-bg);
+  --color-hairline: var(--hairline);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-muted: var(--text-muted);
+  --color-brand: var(--brand);
+  --color-brand-hi: var(--brand-hi);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* 2. TYPOGRAPHY — base */
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 4. BACKGROUND — fixed radial mesh + grain, slow blob drift.
+   Two soft blobs (brand top-left ~8%, accent bottom-right ~6%) over --bg. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(
+      60vw 60vw at 12% 8%,
+      rgba(255, 69, 0, 0.08),
+      transparent 60%
+    ),
+    radial-gradient(
+      55vw 55vw at 88% 92%,
+      rgba(139, 139, 255, 0.06),
+      transparent 60%
+    );
+  animation: blob-drift 48s ease-in-out infinite alternate;
+}
+
+/* Faint grain/noise overlay (~3% opacity, data-URI SVG). */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@keyframes blob-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(-2%, 2%, 0) scale(1.06);
+  }
+}
+
+/* ============================================================
+   Reusable primitives
+   ============================================================ */
+
+/* 3. Glass surfaces (top bar, reveal panel) */
+.glass {
+  background: rgba(20, 22, 26, 0.6);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.shadow-rest {
+  box-shadow: var(--shadow-rest);
+}
+
+/* 6. Loading skeleton shimmer (no spinners) */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* 7. Named interactions */
+@keyframes glow-pulse-success {
+  0%,
+  100% {
+    box-shadow: var(--shadow-rest);
+  }
+  50% {
+    box-shadow: var(--shadow-hover-success);
+  }
+}
+@keyframes shake-x {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-8px);
+  }
+  50% {
+    transform: translateX(8px);
+  }
+  80% {
+    transform: translateX(-6px);
+  }
+}
+
+/* Shiki: theme tuned to tokens */
+.code-shiki,
+.code-shiki pre {
+  background: transparent !important;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 0;
+}
+.code-shiki code {
+  counter-reset: line;
+  display: block;
+}
+.code-shiki .line {
+  display: inline-block;
+  width: 100%;
+}
+.code-shiki .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 2.5em;
+  margin-right: 16px;
+  text-align: right;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* ============================================================
+   Reduced motion — kill tilt/drift/confetti/shake; keep fades
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  body::before {
+    animation: none !important;
+  }
 }
